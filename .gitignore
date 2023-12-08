@@ -1,1 +1,3 @@
 venv/
+.env
+google-service-acc.json
