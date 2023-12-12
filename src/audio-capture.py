@@ -1,125 +1,120 @@
-import sounddevice as sd
-import numpy as np
-from google.cloud import speech_v2
-from google.cloud.speech_v2.types import cloud_speech
+import aiohttp
+import pyaudio
+from deepgram import Deepgram
 from dotenv import load_dotenv
 import os
-import threading
-import queue
-import time
-import sys
+import asyncio
 
 load_dotenv()
-google_project_id = os.getenv('GOOGLE_PROJECT_ID')
 
-# Initialize Google Cloud Speech Client
-# Ensure the environment variable GOOGLE_APPLICATION_CREDENTIALS is set correctly
-# os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = r"C:/Users/Bug/projects/my-live-guru/google-service-acc.json"
-# $env:GOOGLE_APPLICATION_CREDENTIALS="C:/Users/Bug/projects/my-live-guru/google-service-acc.json"
-
-print('', os.getenv("GOOGLE_APPLICATION_CREDENTIALS"))
-
-# client = speech_v2.SpeechClient.from_service_account_json('C:/Users/Bug/projects/my-live-guru/google-service-acc.json')
-client = speech_v2.SpeechClient()
-
-# Define the recognition configuration
-recognition_config = cloud_speech.RecognitionConfig(
-    explicit_decoding_config=speech_v2.ExplicitDecodingConfig(
-        encoding=speech_v2.ExplicitDecodingConfig.AudioEncoding.LINEAR16,
-        sample_rate_hertz=16000,
-        audio_channel_count=1,
-    ),
-    language_codes=["en-US"],
-    model="long",
-)
-
-streaming_config = cloud_speech.StreamingRecognitionConfig(config=recognition_config)
-
-config_request = cloud_speech.StreamingRecognizeRequest(
-    recognizer=f"projects/{google_project_id}/locations/global/recognizers/_",
-    streaming_config=streaming_config,
-)
+DEEPGRAM_API_KEY = os.getenv('DEEPGRAM_API_KEY')
+MIC_DEVICE_ID = 1
+STEREOMIX_DEVICE_ID = 2
 
 class AudioStream:
     def __init__(self):
         self.stream = None
-        self.transcription_callback = None
-        self.config_sent = False
-        self._buffer = queue.Queue()
-        self.worker_thread = threading.Thread(target=self.worker)
-        self.worker_thread.daemon = True
-        self.worker_thread.start()
+        self.audio_callback = None
+        self._buffer = asyncio.Queue(maxsize=5)
+        self.p = pyaudio.PyAudio()  # PyAudio object
 
-    def start(self, device_id, transcription_callback):
-        self.transcription_callback = transcription_callback
+    def start(self, device_id, audio_chunk_callback):
+        self.audio_callback = audio_chunk_callback
         self.stop()
-        # self.stream = sd.InputStream(device=device_id, callback=callback)
-        self.stream = sd.InputStream(samplerate=16000, blocksize=1024*4, device=device_id, channels=1, dtype='int16', callback=self._fill_buffer)
-        self.stream.start()
+        self.stream = self.p.open(format=pyaudio.paInt16,
+                                  channels=1,
+                                  rate=16000,
+                                  input=True,
+                                  input_device_index=device_id,
+                                  frames_per_buffer=1024*4,
+                                  stream_callback=self._fill_buffer)
+        asyncio.create_task(self._consume_buffer())
 
     def stop(self):
         if self.stream is not None:
-            self.stream.stop()
+            self.stream.stop_stream()
             self.stream.close()
             self.stream = None
 
-    def worker(self):
+    def _fill_buffer(self, in_data, frame_count, time_info, status):
+        try:
+            self._buffer.put_nowait(in_data)
+        except asyncio.QueueFull:
+            print("audio queue full")
+        return (None, pyaudio.paContinue)
+    
+    async def _consume_buffer(self):
         while True:
-            audio_data = self._buffer.get()
+            audio_data = await self._buffer.get()
             if audio_data is None:
-                print('f:worker None - returning')
+                print('audio worker: got None from buffer - returning')
                 return
-                # time.sleep(0.1)
-                # continue
-            print('f:worker transcribing')
-            transcript = self.transcribe_audio(audio_data)
-            self.transcription_callback(transcript)
+            if self.audio_callback:
+                self.audio_callback(audio_data)
 
-    def compute_amplitude(self, indata):
-        # basic amplitude for testing
-        return np.linalg.norm(indata) * 10
-    
-    def transcribe_audio(self, indata):
-        print('f:transcribe_audio')
-        # transcribe = str(self.compute_amplitude(indata))
-        # transcribe = 'indata len: ' + str(len(indata))
-        # return transcribe
+class DeepgramTranscriber:
+    def __init__(self, DEEPGRAM_API_KEY):
+        self.client = Deepgram(DEEPGRAM_API_KEY)
+        self.deepgram_live = None
+        self.transcription_callback = None
+
+    async def initialize(self, transcription_callback):
+        self.transcription_callback = transcription_callback
+        try:
+            # create a websocket connection to deepgram
+            self.deepgram_live = await self.client.transcription.live(
+                { 
+                    "smart_format": True, 
+                    "model": "nova-2", 
+                    "language": "en-US",
+                    "encoding": "linear16",
+                    "channels": 1,
+                    "sample_rate": 16000,
+                }
+            )
+        except Exception as e:
+            print(f'could not open deepgram socket: {e}')
         
-        # Convert the NumPy array to bytes and send for transcription
-        audio_chunk = indata.tobytes()
-        audio_request = cloud_speech.StreamingRecognizeRequest(audio=audio_chunk)
-        
-        def request_generator():
-            if not self.config_sent:
-                self.config_sent = True
-                yield config_request
-            yield audio_request
+        # deepgram events
+        self.deepgram_live.register_handler(
+            self.deepgram_live.event.TRANSCRIPT_RECEIVED, 
+            self._deepgram_transcription_callback
+        )
 
-        responses_iterator = client.streaming_recognize(requests=request_generator())
-        transcript = ""
-        for response in responses_iterator:
-            for result in response.results:
-                transcript += str(result.alternatives[0].transcript)
-        return transcript
+        self.deepgram_live.register_handler(
+            self.deepgram_live.event.CLOSE,
+            lambda _: print('deepgram connection closed')
+        )
     
-    def _fill_buffer(self, indata, frames, time, status):
-        self._buffer.put(indata.copy())
+    # new transcription received
+    def _deepgram_transcription_callback(self, transcript_json):
+        transcription = transcript_json['channel']['alternatives'][0]['transcript']
+        self.transcription_callback(transcription)
+    
+    # sends a new audio chunk for deepgram live transcription
+    def process_audio_chunk(self, chunk):
+        self.deepgram_live.send(chunk)
 
-def print_transcript(transcript):
-    print('print_transcript: ', transcript)
+def print_transcription(transcription):
+    print(transcription)
 
-audio_stream_user = AudioStream()
-audio_stream_user.start(1, print_transcript)
+async def main():
+    deepgram_transcriber = DeepgramTranscriber(DEEPGRAM_API_KEY)
+    await deepgram_transcriber.initialize(print_transcription)
+    audio_stream_user = AudioStream()
+    audio_stream_user.start(STEREOMIX_DEVICE_ID, deepgram_transcriber.process_audio_chunk)
+    try:
+        while True:
+            await asyncio.sleep(0.1)
+    except KeyboardInterrupt:
+        audio_stream_user.stop()
+        print("Audio stream stopped.")
 
-try:
-    while True:
-        # Keep the main thread alive.
-        time.sleep(0.1)
-except KeyboardInterrupt:
-    audio_stream_user.stop()
-    print("Audio stream stopped.")
+asyncio.run(main())
+
 
 # app = AppGUI((audio_stream_user,))
 # app.run()
 # audio_stream_sys = AudioStream()
 # app = AppGUI((audio_stream_user, audio_stream_sys))
+
