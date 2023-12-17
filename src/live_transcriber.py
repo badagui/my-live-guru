@@ -1,4 +1,5 @@
 import asyncio
+import re
 import threading
 import pyaudio
 from deepgram import Deepgram
@@ -12,12 +13,12 @@ class TranscriptionController:
         self.deepgram_transcriber = DeepgramTranscriber(DEEPGRAM_API_KEY)
         self.audio_stream_user = None
         self.audio_stream_system = None
-        self.results = queue.Queue(10) # thread safe interface
+        self.final_results = queue.Queue(10) # thread safe interface
 
     async def start(self, device_ids: list):
         print (f'starting transcription controller with device ids {device_ids}')
         try:
-            await self.deepgram_transcriber.initialize(self.results)
+            await self.deepgram_transcriber.initialize(self.final_results)
             audio_mixer = AudioMixer(device_ids, 1, self.deepgram_transcriber.send_audio)
             self.audio_stream_user = AudioStream(self.p, device_ids[0], audio_mixer.audio_handler)
             self.audio_stream_system = AudioStream(self.p, device_ids[1], audio_mixer.audio_handler)
@@ -38,6 +39,8 @@ class TranscriptionController:
 
     async def terminate(self):
         await self.stop()
+    
+    
 
 # mixes audio streams into a single or multi-channel buffer
 class AudioMixer:
@@ -139,7 +142,8 @@ class DeepgramTranscriber:
         self.client = Deepgram(DEEPGRAM_API_KEY)
         self.deepgram_live = None
         self.results_queue = None
-
+        self.final_phrase = ""
+        
     async def initialize(self, results_queue: queue.Queue):
         self.results_queue = results_queue
         try:
@@ -180,9 +184,10 @@ class DeepgramTranscriber:
             return
         is_channel_0 = transcript_json['channel_index'][0] == 0
         prefix = 'user: ' if is_channel_0 else 'system: '
-        final_msg = prefix + transcription
+        prefixed_msg = prefix + transcription
         try:
-            self.results_queue.put_nowait(('transcription_msg', final_msg))
+            # self.results_queue.put_nowait(('transcription_msg', final_msg))
+            self.build_final_phrase(prefixed_msg)
         except queue.Full:
             print("results queue full")
         except Exception as e:
@@ -195,6 +200,44 @@ class DeepgramTranscriber:
         except Exception as e:
             print(f"deepgram send audio exception {e}")
     
+    def build_final_phrase(self, prefixed_msg: str):
+        # final phrase is empty, start new phrase
+        if self.final_phrase == "":
+            self.final_phrase = prefixed_msg
+        # same speaker, append
+        elif prefixed_msg[:5] == self.final_phrase[:5]:
+                #remove prefix
+                prefixes = ["user:", "system:"]
+                for prefix in prefixes:
+                    if prefixed_msg.startswith(prefix):
+                        prefixed_msg = prefixed_msg[len(prefix):]
+                # add to final phrase
+                self.final_phrase += prefixed_msg
+        # different speaker, send current phrase and start a new one
+        else:
+            self.results_queue.put_nowait(('transcription_msg', self.final_phrase))
+            self.final_phrase = prefixed_msg
+        # send finished phrases
+        if any(punct in self.final_phrase for punct in ('.', '?', '!')):
+            # split the phrase at each punctuation mark
+            parts = re.split(r'([.!?])', self.final_phrase)
+            for part in parts[:-1]:
+                # add the punctuation back to the split parts
+                if part in '.!?':
+                    continue
+                next_index = parts.index(part) + 1
+                if parts[next_index] in '.!?':
+                    part += parts[next_index]
+                # enqueue the part
+                self.results_queue.put_nowait(('transcription_msg', part))
+
+            # treat last part
+            if parts[-1].endswith(('.', '?', '!')):
+                self.results_queue.put_nowait(('transcription_msg', parts[-1]))
+                self.final_phrase = ""
+            else:
+                self.final_phrase = parts[-1]
+
     async def close(self):
         # check if deepgram connection is open before finishing
         if self.deepgram_live is None:

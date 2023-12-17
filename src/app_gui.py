@@ -36,7 +36,7 @@ class AppGUI:
     def check_queue(self):
         try:
             while True:
-                msg_type, msg = self.transcription_controller.results.get_nowait()
+                msg_type, msg = self.transcription_controller.final_results.get_nowait()
                 if msg_type == "transcription_msg":
                     self.update_log(msg)
                 else:
@@ -75,9 +75,14 @@ class AppGUI:
         label_textbox_right = tk.Label(self.root, text="Guru:", justify='left')
         label_textbox_right.grid(row=2, column=3, padx=10, pady=10)
 
-        # transcribed text box with scrollbar
-        self.textbox = scrolledtext.ScrolledText(self.root, wrap=tk.WORD, height=25, width=60)
+        # transcribed text box
+        self.textbox = scrolledtext.ScrolledText(self.root, wrap=tk.WORD, height=25, width=50)
         self.textbox.grid(row=3, column=0, padx=10, pady=10, columnspan=3)
+        self.textbox.configure(state='disabled')
+
+        # AI text box
+        self.textbox = scrolledtext.ScrolledText(self.root, wrap=tk.WORD, height=25, width=50)
+        self.textbox.grid(row=3, column=3, padx=10, pady=10, columnspan=3)
         self.textbox.configure(state='disabled')
 
     def find_devices(self):
