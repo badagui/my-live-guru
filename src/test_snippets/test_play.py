@@ -1,7 +1,7 @@
 import pyaudio
 
 # Define the file path for the raw audio file
-filename = 'recorded_audio.wav'
+filename = 'mixed_audio.wav'
 
 # Audio stream parameters
 chunk = 1024
@@ -13,7 +13,7 @@ p = pyaudio.PyAudio()
 with open(filename, 'rb') as f:
     # Open a stream
     stream = p.open(format=pyaudio.paInt16,
-                    channels=1,
+                    channels=2,
                     rate=16000,
                     output=True)
 
