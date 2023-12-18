@@ -39,6 +39,7 @@ class TranscriptionController:
     async def terminate(self):
         await self.stop()
     
+    
 # mixes audio streams into a single or multi-channel buffer
 class AudioMixer:
     # mode 0: mix all devices into a single channel
@@ -54,7 +55,6 @@ class AudioMixer:
         self.audio_sync = {device_id: None for device_id in device_ids}
 
     def audio_handler(self, device_id, audio):
-        print('received device_id', device_id, 'audio', len(audio), 'bytes')
         # store audio chunk
         self.audio_sync[device_id] = audio
         
@@ -87,7 +87,6 @@ class AudioMixer:
         for device_id in self.audio_sync:
             audio_arrays.append(np.frombuffer(self.audio_sync[device_id], dtype=np.int16))
 
-        print(len(audio_arrays)) # 2
         if not audio_arrays:
             raise ValueError("no audio data found")
         
@@ -192,24 +191,40 @@ class DeepgramTranscriber:
     async def _transcript_received(self, transcript_json: dict):
         if not 'channel' in transcript_json:
             return
-        transcription = transcript_json['channel']['alternatives'][0]['transcript']
+        
+        transcription: str = transcript_json['channel']['alternatives'][0]['transcript']
+        
         # stop propagation if empty
         if not transcription:
             return
+        
+        # clear new lines
+        transcription = transcription.replace('\n', '').replace('\r', '')
+
+        # check need for prefix and speaker identifier
         is_channel_0 = transcript_json['channel_index'][0] == 0
-        prefix = 'user: ' if is_channel_0 else 'system: '
-        # check need for prefix
+        msg_type = 'user_msg' if is_channel_0 else 'system_msg'
+        speaker = 'user: ' if is_channel_0 else 'system: '
+        if self.last_speaker == "":
+            # first message
+            transcription = speaker + transcription
+        elif speaker != self.last_speaker:
+            # new speaker
+            transcription = "\n" + speaker + transcription
+        else:
+            # same speaker
+            transcription = " " + transcription
+        
+        # put message in queue for consumption
         try:
-            if prefix == self.last_speaker:
-                self.results_queue.put_nowait(('transcription_msg', transcription))
-            else:
-                self.results_queue.put_nowait(('transcription_msg', prefix + transcription))
+            self.results_queue.put_nowait((msg_type, transcription))
         except queue.Full:
             print("results queue full")
         except Exception as e:
             print(f"results queue exception {e}")
+        
         # update last speaker
-        self.last_speaker = prefix
+        self.last_speaker = speaker
     
     # sends audio chunk to live transcription API
     def send_audio(self, chunk):

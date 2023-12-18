@@ -37,14 +37,12 @@ class AppGUI:
         try:
             while True:
                 msg_type, msg = self.transcription_controller.final_results.get_nowait()
-                if msg_type == "transcription_msg":
-                    self.update_log(msg)
+                if msg_type == "user_msg":
+                    self.update_log(msg, "#004000")
+                elif msg_type == "system_msg":
+                    self.update_log(msg, "#000050")
                 else:
                     print(f"unknown message type {msg_type}")
-                # custom commands:
-                if msg.lower().startswith("user: close program"):
-                    self.update_log('closing...')
-                    self.root.after(1000, self.on_closing)
         except queue.Empty:
             pass
         finally:
@@ -112,11 +110,19 @@ class AppGUI:
             self.stop_audio_streams()
             self.capture_button.config(text="Start Capture")
 
-    def update_log(self, message):
+    def update_log(self, message, color='black'):
         # update the scrolled text widget with a new message
         def task():
             self.textbox_left.configure(state='normal')
-            self.textbox_left.insert(tk.END, message + "\n")
+            
+            # Use color code as the tag name
+            color_tag = f"color_{color}"
+            if color_tag not in self.textbox_left.tag_names():
+                self.textbox_left.tag_configure(color_tag, foreground=color)
+
+            # insert text with the color tag
+            self.textbox_left.insert(tk.END, message, color_tag)
+
             self.textbox_left.configure(state='disabled')
             self.textbox_left.see(tk.END)
         self.root.after(0, task)
