@@ -1,7 +1,7 @@
 import pyaudio
 
 # Define the file path for the raw audio file
-filename = 'mixed_audio.wav'
+filename = 'mixed_audio.lin16'
 
 # Audio stream parameters
 chunk = 1024

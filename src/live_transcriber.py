@@ -1,6 +1,4 @@
 import asyncio
-import re
-import threading
 import pyaudio
 from deepgram import Deepgram
 import numpy as np
@@ -22,6 +20,7 @@ class TranscriptionController:
             audio_mixer = AudioMixer(device_ids, 1, self.deepgram_transcriber.send_audio)
             self.audio_stream_user = AudioStream(self.p, device_ids[0], audio_mixer.audio_handler)
             self.audio_stream_system = AudioStream(self.p, device_ids[1], audio_mixer.audio_handler)
+            # audio_mixer.save_mixed_data_to_file('mixed_audio.lin16') # uncomment to save mixed audio to file
         except Exception as e:
             print(f"audio controller start exception {e}")
     
@@ -40,8 +39,6 @@ class TranscriptionController:
     async def terminate(self):
         await self.stop()
     
-    
-
 # mixes audio streams into a single or multi-channel buffer
 class AudioMixer:
     # mode 0: mix all devices into a single channel
@@ -51,54 +48,67 @@ class AudioMixer:
         self.set_new_device_ids(device_ids)
         self.mode = mode
         self.mixed_callback = mixed_callback
+        self.mixed_data_file = None
 
     def set_new_device_ids(self, device_ids: list):
-        self.audio = {device_id: None for device_id in device_ids}
+        self.audio_sync = {device_id: None for device_id in device_ids}
 
     def audio_handler(self, device_id, audio):
+        print('received device_id', device_id, 'audio', len(audio), 'bytes')
         # store audio chunk
-        self.audio[device_id] = audio
+        self.audio_sync[device_id] = audio
         
         # check if all data available
-        if not all(data is not None for data in self.audio.values()):
+        if not all(data is not None for data in self.audio_sync.values()):
             return
         
         # mix data
         mixed_data = self._mix_audio()
+
+        # sends mixed data
         if self.mixed_callback:
             self.mixed_callback(mixed_data)
+
+        # save mixed data to file if specified
+        if self.mixed_data_file:  # Check if a file is open and save mixed_data
+            with open(self.mixed_data_file, 'ab') as file:
+                file.write(mixed_data)
         
         # clear buffer - keys must persist to check for data availability
-        self.audio = {key: None for key in self.audio}
+        self.audio_sync = {key: None for key in self.audio_sync}
 
     def _mix_audio(self):
-        if not self.audio:
+        if not self.audio_sync:
             raise ValueError("audio_data is empty")
         
         audio_arrays = []
 
         # gather audio data
-        for device_id in self.audio:
-            audio_arrays.append(np.frombuffer(self.audio[device_id], dtype=np.int16))
+        for device_id in self.audio_sync:
+            audio_arrays.append(np.frombuffer(self.audio_sync[device_id], dtype=np.int16))
 
+        print(len(audio_arrays)) # 2
         if not audio_arrays:
             raise ValueError("no audio data found")
         
         # single channel, averaged
-        if (self.mode == 0):
+        if self.mode == 0:
             mixed_array = np.mean(audio_arrays, axis=0).astype(np.int16)
             return mixed_array.tobytes()
         
         # multi channel
-        if (self.mode == 1):
+        if self.mode == 1:
             return np.stack(audio_arrays, axis=-1).tobytes()
+    
+    def save_mixed_data_to_file(self, filename):
+        self.mixed_data_file = filename
 
 # single audio stream that generate audio slices from an input device
 class AudioStream:
-    def __init__(self, pyaudio_obj, device_id, audio_chunk_callback):
+    def __init__(self, pyaudio_obj, device_id, audio_callback):
         self.p = pyaudio_obj  # PyAudio object
         self.device_id = device_id
-        self.audio_callback = audio_chunk_callback
+        self.audio_callback = audio_callback
         self._buffer = asyncio.Queue(maxsize=5)
         
         self.stream = self.p.open(format=pyaudio.paInt16,
@@ -121,6 +131,8 @@ class AudioStream:
         try:
             self._buffer.put_nowait(in_data)
             return (None, pyaudio.paContinue)
+        except asyncio.QueueFull:
+            print("buffer full, dropping audio data")
         except:
             print ("fill buffer exception")
     
@@ -133,7 +145,9 @@ class AudioStream:
                     return
                 if self.audio_callback:
                     self.audio_callback(self.device_id, audio_data)
+                await asyncio.sleep(0.01)
         except:
+            print("consume buffer exception")
             return
 
 # accept audio slices and sends them to deepgram returning transcriptions
@@ -142,8 +156,8 @@ class DeepgramTranscriber:
         self.client = Deepgram(DEEPGRAM_API_KEY)
         self.deepgram_live = None
         self.results_queue = None
-        self.final_phrase = ""
-        
+        self.last_speaker = ""
+
     async def initialize(self, results_queue: queue.Queue):
         self.results_queue = results_queue
         try:
@@ -174,7 +188,7 @@ class DeepgramTranscriber:
             lambda _: print('deepgram connection closed')
         )
     
-    # transcription result received
+    # put transcription results on queue appending the speaker prefix when needed.
     async def _transcript_received(self, transcript_json: dict):
         if not 'channel' in transcript_json:
             return
@@ -184,14 +198,18 @@ class DeepgramTranscriber:
             return
         is_channel_0 = transcript_json['channel_index'][0] == 0
         prefix = 'user: ' if is_channel_0 else 'system: '
-        prefixed_msg = prefix + transcription
+        # check need for prefix
         try:
-            # self.results_queue.put_nowait(('transcription_msg', final_msg))
-            self.build_final_phrase(prefixed_msg)
+            if prefix == self.last_speaker:
+                self.results_queue.put_nowait(('transcription_msg', transcription))
+            else:
+                self.results_queue.put_nowait(('transcription_msg', prefix + transcription))
         except queue.Full:
             print("results queue full")
         except Exception as e:
             print(f"results queue exception {e}")
+        # update last speaker
+        self.last_speaker = prefix
     
     # sends audio chunk to live transcription API
     def send_audio(self, chunk):
@@ -200,44 +218,6 @@ class DeepgramTranscriber:
         except Exception as e:
             print(f"deepgram send audio exception {e}")
     
-    def build_final_phrase(self, prefixed_msg: str):
-        # final phrase is empty, start new phrase
-        if self.final_phrase == "":
-            self.final_phrase = prefixed_msg
-        # same speaker, append
-        elif prefixed_msg[:5] == self.final_phrase[:5]:
-                #remove prefix
-                prefixes = ["user:", "system:"]
-                for prefix in prefixes:
-                    if prefixed_msg.startswith(prefix):
-                        prefixed_msg = prefixed_msg[len(prefix):]
-                # add to final phrase
-                self.final_phrase += prefixed_msg
-        # different speaker, send current phrase and start a new one
-        else:
-            self.results_queue.put_nowait(('transcription_msg', self.final_phrase))
-            self.final_phrase = prefixed_msg
-        # send finished phrases
-        if any(punct in self.final_phrase for punct in ('.', '?', '!')):
-            # split the phrase at each punctuation mark
-            parts = re.split(r'([.!?])', self.final_phrase)
-            for part in parts[:-1]:
-                # add the punctuation back to the split parts
-                if part in '.!?':
-                    continue
-                next_index = parts.index(part) + 1
-                if parts[next_index] in '.!?':
-                    part += parts[next_index]
-                # enqueue the part
-                self.results_queue.put_nowait(('transcription_msg', part))
-
-            # treat last part
-            if parts[-1].endswith(('.', '?', '!')):
-                self.results_queue.put_nowait(('transcription_msg', parts[-1]))
-                self.final_phrase = ""
-            else:
-                self.final_phrase = parts[-1]
-
     async def close(self):
         # check if deepgram connection is open before finishing
         if self.deepgram_live is None:
