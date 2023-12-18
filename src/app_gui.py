@@ -96,19 +96,19 @@ class AppGUI:
     def start_audio_streams(self):
         device_ids = [self.device_map[dropdown.selected_option.get()] for dropdown in self.audio_input_dropdowns]
         asyncio.run_coroutine_threadsafe(self.transcription_controller.start(device_ids), self.asyncio_loop)
+        self.capture_button.config(text="Stop Capture")
 
     def stop_audio_streams(self):
         future = asyncio.run_coroutine_threadsafe(self.transcription_controller.stop(), self.asyncio_loop)
         future.result() # make UI hang while stopping
+        self.capture_button.config(text="Start Capture")
 
     def toggle_capture(self):
         # toggle capture button logic
         if self.transcription_controller.audio_stream_user is None:
             self.start_audio_streams()
-            self.capture_button.config(text="Stop Capture")
         else:
             self.stop_audio_streams()
-            self.capture_button.config(text="Start Capture")
 
     def update_log(self, message, color='black'):
         # update the scrolled text widget with a new message
