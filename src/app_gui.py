@@ -76,14 +76,14 @@ class AppGUI:
         label_textbox_right.grid(row=2, column=3, padx=10, pady=10)
 
         # transcribed text box
-        self.textbox = scrolledtext.ScrolledText(self.root, wrap=tk.WORD, height=25, width=50)
-        self.textbox.grid(row=3, column=0, padx=10, pady=10, columnspan=3)
-        self.textbox.configure(state='disabled')
+        self.textbox_left = scrolledtext.ScrolledText(self.root, wrap=tk.WORD, height=25, width=50)
+        self.textbox_left.grid(row=3, column=0, padx=10, pady=10, columnspan=3)
+        self.textbox_left.configure(state='disabled')
 
         # AI text box
-        self.textbox = scrolledtext.ScrolledText(self.root, wrap=tk.WORD, height=25, width=50)
-        self.textbox.grid(row=3, column=3, padx=10, pady=10, columnspan=3)
-        self.textbox.configure(state='disabled')
+        self.textbox_right = scrolledtext.ScrolledText(self.root, wrap=tk.WORD, height=25, width=50)
+        self.textbox_right.grid(row=3, column=3, padx=10, pady=10, columnspan=3)
+        self.textbox_right.configure(state='disabled')
 
     def find_devices(self):
         # query and map audio devices
@@ -115,10 +115,10 @@ class AppGUI:
     def update_log(self, message):
         # update the scrolled text widget with a new message
         def task():
-            self.textbox.configure(state='normal')
-            self.textbox.insert(tk.END, message + "\n")
-            self.textbox.configure(state='disabled')
-            self.textbox.see(tk.END)
+            self.textbox_left.configure(state='normal')
+            self.textbox_left.insert(tk.END, message + "\n")
+            self.textbox_left.configure(state='disabled')
+            self.textbox_left.see(tk.END)
         self.root.after(0, task)
 
 class DeviceSelectDropdown:
