@@ -13,13 +13,17 @@ class TranscriptionController:
         self.audio_stream_system = None
         self.final_results = queue.Queue(10) # thread safe interface
 
-    async def start(self, device_ids: list):
+    async def start(self, device_ids: list, language: str):
         print (f'starting transcription controller with device ids {device_ids}')
+        channels = len(device_ids)
+        multichannel = channels > 1
         try:
-            await self.deepgram_transcriber.initialize(self.final_results)
-            audio_mixer = AudioMixer(device_ids, 1, self.deepgram_transcriber.send_audio)
+            await self.deepgram_transcriber.initialize(self.final_results, language, channels, multichannel)
+            mixer_mode = 1 if multichannel else 0
+            audio_mixer = AudioMixer(device_ids, mixer_mode, self.deepgram_transcriber.send_audio)
             self.audio_stream_user = AudioStream(self.p, device_ids[0], audio_mixer.audio_handler)
-            self.audio_stream_system = AudioStream(self.p, device_ids[1], audio_mixer.audio_handler)
+            if (len(device_ids) == 2):
+                self.audio_stream_system = AudioStream(self.p, device_ids[1], audio_mixer.audio_handler)
             # audio_mixer.save_mixed_data_to_file('mixed_audio.lin16') # uncomment to save mixed audio to file
         except Exception as e:
             print(f"audio controller start exception {e}")
@@ -157,7 +161,7 @@ class DeepgramTranscriber:
         self.results_queue = None
         self.last_speaker = ""
 
-    async def initialize(self, results_queue: queue.Queue):
+    async def initialize(self, results_queue: queue.Queue, language: str, channels: int, multichannel: bool):
         self.results_queue = results_queue
         try:
             # create a websocket connection to deepgram
@@ -165,10 +169,10 @@ class DeepgramTranscriber:
                 { 
                     "smart_format": True, 
                     "model": "nova-2", 
-                    "language": "en-US",
+                    "language": language,
                     "encoding": "linear16",
-                    "multichannel": True,
-                    "channels": 2,
+                    "multichannel": multichannel,
+                    "channels": channels,
                     "sample_rate": 16000
                 }
             )

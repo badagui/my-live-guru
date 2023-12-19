@@ -58,9 +58,18 @@ class AppGUI:
 
         # dropdown for audio input
         self.find_devices()
-        device_names = list(self.device_map.keys())
+        device_names = [x for x in self.device_map.keys() if x != 'None']
+        device_names.insert(0, 'None') # make 'None' first element
         self.audio_input_dropdowns.append(DeviceSelectDropdown(self.root, 0, 1, device_names, self.stop_audio_streams))
         self.audio_input_dropdowns.append(DeviceSelectDropdown(self.root, 1, 1, device_names, self.stop_audio_streams))
+
+        # language dropdown
+        languages = ["en-US", "en-GB", "en-AU", "en-IN", "en-CA", "en-NZ"]
+        self.selected_language = tk.StringVar(self.root)
+        self.selected_language.set("en-US")
+        self.selected_language.trace_add('write', self.language_changed)
+        language_dropdown = tk.OptionMenu(self.root, self.selected_language, *languages)
+        language_dropdown.grid(row=1, column=3, padx=10, pady=10)
 
         # start/stop capture button
         self.capture_button = tk.Button(self.root, text="Start Capture", command=self.toggle_capture)
@@ -90,12 +99,22 @@ class AppGUI:
             device_info = self.transcription_controller.p.get_device_info_by_index(i)
             # check for input channels
             if device_info['maxInputChannels'] > 0:
+                # create device name
                 device_name = f"{str(device_info['index'])}. {device_info['name']}"
+                # set local data
                 self.device_map[device_name] = device_info['index']
+                self.device_map['None'] = None
    
     def start_audio_streams(self):
+        # get selected
         device_ids = [self.device_map[dropdown.selected_option.get()] for dropdown in self.audio_input_dropdowns]
-        asyncio.run_coroutine_threadsafe(self.transcription_controller.start(device_ids), self.asyncio_loop)
+        # remove None values
+        device_ids = [x for x in device_ids if x is not None]
+        if (len(device_ids) == 0):
+            print("no audio input devices selected")
+            return
+        language = self.selected_language.get()
+        asyncio.run_coroutine_threadsafe(self.transcription_controller.start(device_ids, language), self.asyncio_loop)
         self.capture_button.config(text="Stop Capture")
 
     def stop_audio_streams(self):
@@ -127,13 +146,16 @@ class AppGUI:
             self.textbox_left.see(tk.END)
         self.root.after(0, task)
 
+    def language_changed(self, *args):
+        print(f"language changed to {self.selected_language.get()}")
+
 class DeviceSelectDropdown:
     def __init__(self, master, row, col, device_names, device_changed_callback):
         self.device_changed_callback = device_changed_callback
         # creates dropdown for selecting audio input device
         self.selected_option = tk.StringVar(master)
         self.selected_option.set(device_names[0] if device_names else "")
-        self.selected_option.trace('w', self.device_changed)
+        self.selected_option.trace_add('write', self.device_changed)
         self.audio_input_dropdown = tk.OptionMenu(master, self.selected_option, *device_names)
         self.audio_input_dropdown.grid(row=row, column=col, padx=10, pady=10)
 
