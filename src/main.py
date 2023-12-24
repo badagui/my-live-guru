@@ -1,3 +1,19 @@
+"""
+    author: Jonas Mirovski
+    email: jonasmirovski@gmail.com
+
+    considerations
+
+    * TkInter GUI lives on mainthread.
+    * asyncio mainloop lives in an off-thread.
+    * PyAudio streams live in their own threads, capturing single-channel 16bit data and putting them into a buffer for thread safe consumption.
+    * two capture streams are created, one for the user, and one for the system loopback audio.
+    * each input stream buffer is then consumed in the asyncio loop and then passed to our AudioMixer.
+    * AudioMixer joins the audio slices into a dual channel buffer that is then sent to Deepgram with multichannel=True (Multichannel audio is audio that has multiple separate audio channels, and the audio in each channel is distinct).
+    * Deepgram puts the results in our TranscriptionController queue for thread safe consumption again.
+    * TkInter consumes the buffer directly from the main thread, for simplicity.
+"""
+
 from threading import Thread
 import pyaudio
 import os
