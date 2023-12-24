@@ -1,16 +1,17 @@
-import threading
-from app_gui import AppGUI
 from threading import Thread
 import pyaudio
-from dotenv import load_dotenv
 import os
 import asyncio
 import signal
+from dotenv import load_dotenv
+from app_gui import AppGUI
 from live_transcriber import TranscriptionController
+from gpt_controller import GPTController
 
 load_dotenv()
 
 DEEPGRAM_API_KEY = os.getenv('DEEPGRAM_API_KEY')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 MIC_DEVICE_ID = 1
 STEREOMIX_DEVICE_ID = 2
 
@@ -57,6 +58,7 @@ signal.signal(signal.SIGINT, SIGINT_handler)
 
 p = pyaudio.PyAudio()
 transcription_controller = TranscriptionController(p, DEEPGRAM_API_KEY)
+gpt_controller = GPTController(OPENAI_API_KEY)
 terminate_event = EventAsyncio()
 
 # start the asyncio loop in a separate thread
@@ -65,7 +67,7 @@ asyncio_thread = Thread(target=start_asyncio_loop, args=(asyncio_loop, terminate
 asyncio_thread.start()
 
 # start GUI loop in mainthread
-app_gui = AppGUI(transcription_controller, asyncio_loop, terminate_event)
+app_gui = AppGUI(transcription_controller, gpt_controller, asyncio_loop, terminate_event)
 app_gui.run_mainloop()
 
 p.terminate()
