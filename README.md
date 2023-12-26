@@ -26,7 +26,7 @@ A real time voice transcription assistant with single-click LLM feedback.
 * The transcription will be updated in real time and you will be identified as "user:" and the loopback audio as "system:".
 * Click ASK GURU to send the prompt to the LLM and get the response.
 
-## Example taken from the following mock interview video:
+## Example taken using the following mock interview video:
 https://www.youtube.com/watch?v=1qw5ITr3k9E&t=164s
 
 <br><img src="https://github.com/badagui/my-live-guru/assets/18372659/19403ec8-a6ef-40c1-a5df-c506da7f30f7" width="600">
