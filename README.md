@@ -17,7 +17,7 @@ A real time voice transcription assistant with single-click LLM feedback.
 * set up a system audio loopback: activate Stereo Mix (Windows) or set up PulseAudio for monitor of your output device (Linux).
 * run python src/main.py
   
-<br><br>explanation: accessing the system audio output directly is hard. So we need a virtual input containing all the output audio (an audio loopback). There are many free softwares that can create this, and windows comes with this by default called Stereo Mix, just have to activate it. Getting the raw output audio this way ensures we can work with any source.
+<br>explanation: accessing the system audio output directly is hard. So we need a virtual input containing all the output audio (an audio loopback). There are many free softwares that can create this, and windows comes with this by default called Stereo Mix, just have to activate it. Getting the raw output audio this way ensures we can work with any source.
 
 ## Use Instructions:
 * Prepare your prompt in the stage tab.
