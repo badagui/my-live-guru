@@ -2,12 +2,12 @@
 
 A real time voice transcription assistant with single-click LLM feedback.
 
+<br><img src="https://github.com/badagui/my-live-guru/assets/18372659/d945c33a-dc38-47d5-abec-0d9bc8a6d488" width="700">
+
 * Uses Deepgram API for transcription
 * Uses OpenAI API for LLM
 * Uses PyAudio for audio capture
 * Uses TkInter for GUI
-
-<br><img src="https://github.com/badagui/my-live-guru/assets/18372659/d945c33a-dc38-47d5-abec-0d9bc8a6d488" width="700">
 
 ## Run Instructions:
 * clone this repo
