@@ -17,7 +17,7 @@ A real time voice transcription assistant with single-click LLM feedback.
 * set up a system audio loopback: activate Stereo Mix (Windows) or set up PulseAudio to monitor your output device (Linux).
 * run python src/main.py
   
-<br>explanation: accessing the system audio output directly is hard, so we need a virtual input containing all the output audio (an audio loopback). There are many free softwares that can do this, and windows comes with this by default called Stereo Mix, just have to activate it. Getting the raw output audio this way ensures we can work with any source.
+explanation: accessing the system audio output directly is hard, so we need a virtual input containing all the output audio (an audio loopback). There are many free softwares that can do this, and windows comes with this by default called Stereo Mix, just have to activate it. Getting the raw output audio this way ensures we can work with any source.
 
 ## Use Instructions:
 * Prepare your prompt in the stage tab.
@@ -26,7 +26,7 @@ A real time voice transcription assistant with single-click LLM feedback.
 * The transcription will be updated in real time and you will be identified as "user:" and the loopback audio as "system:".
 * Click ASK GURU to send the prompt to the LLM and get the response.
 
-## Example taken using the following mock interview video:
+## Example using a mock interview video (from 2:44 to 3:54):
 https://www.youtube.com/watch?v=1qw5ITr3k9E&t=164s
 
 <br><img src="https://github.com/badagui/my-live-guru/assets/18372659/19403ec8-a6ef-40c1-a5df-c506da7f30f7" width="600">
