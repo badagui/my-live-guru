@@ -1,6 +1,6 @@
 # My Live Guru
 
-A real time voice transcription assistant that offers LLM access based on previously registered prompts with a single click.
+A real time voice transcription assistant with LLM access.
 
 <br><img src="https://github.com/badagui/my-live-guru/assets/18372659/d945c33a-dc38-47d5-abec-0d9bc8a6d488" width="700">
 
