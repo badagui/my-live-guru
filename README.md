@@ -14,7 +14,7 @@ A real time voice transcription assistant with single-click LLM feedback.
 * python -m venv venv
 * pip install -r requirements.txt
 * create a .env file with DEEPGRAM_API_KEY and OPENAI_API_KEY set
-* set up a system audio loopback: activate Stereo Mix (Windows) or set up PulseAudio for monitor of your output device (Linux).
+* set up a system audio loopback: activate Stereo Mix (Windows) or set up PulseAudio to monitor your output device (Linux).
 * run python src/main.py
   
 <br>explanation: accessing the system audio output directly is hard, so we need a virtual input containing all the output audio (an audio loopback). There are many free softwares that can do this, and windows comes with this by default called Stereo Mix, just have to activate it. Getting the raw output audio this way ensures we can work with any source.
