@@ -21,7 +21,7 @@ class AppGUI:
         # create the main window
         self.root = tk.Tk() 
         self.root.title("My Live Guru")
-        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        self.root.protocol("WM_DELETE_WINDOW", self.close_program)
         self.create_widgets()
 
     def run_mainloop(self):
@@ -29,20 +29,21 @@ class AppGUI:
         self.consume_ai_answer()
         self.root.mainloop()
     
-    def on_closing(self):
+    def close_program(self):
         print("performing cleanup...")
-        self.stop_audio_streams()
+        # stop transcription controller
+        self.stop_transcription()
         
-        # terminate asyncio main loop
+        # stop asyncio main loop
         self.asyncio_loop.call_soon_threadsafe(self.terminate_event.set)
         
-        print("destroying GUI...")
+        # terminate GUI
         self.root.destroy()
 
     def consume_transcription(self):
         try:
             while True:
-                msg_type, msg = self.transcription_controller.final_results.get_nowait()
+                msg_type, msg = self.transcription_controller.transcriptions_queue.get_nowait()
                 if msg_type == "user_msg":
                     self.update_log(msg, "#004000")
                 elif msg_type == "system_msg":
@@ -87,8 +88,8 @@ class AppGUI:
         self.find_devices()
         device_names = [x for x in self.device_map.keys() if x != 'None']
         device_names.insert(0, 'None') # make 'None' first element
-        self.audio_input_dropdowns.append(DeviceSelectDropdown(self.tab1, 0, 1, device_names, self.stop_audio_streams))
-        self.audio_input_dropdowns.append(DeviceSelectDropdown(self.tab1, 1, 1, device_names, self.stop_audio_streams))
+        self.audio_input_dropdowns.append(DeviceSelectDropdown(self.tab1, 0, 1, device_names, self.stop_transcription))
+        self.audio_input_dropdowns.append(DeviceSelectDropdown(self.tab1, 1, 1, device_names, self.stop_transcription))
 
         # language selection dropdown
         languages = ["en", "en-US", "en-AU", "en-GB", "en-NZ", "en-IN", "fr", "fr-CA", "de", "hi", "hi-Latn", "pt", "pt-BR", "es", "es-419"]
@@ -158,42 +159,46 @@ class AppGUI:
 
 
     def find_devices(self):
-        # query and map audio devices
+        # query and map audio input devices
         num_devices = self.transcription_controller.p.get_device_count()
         for i in range(num_devices):
             device_info = self.transcription_controller.p.get_device_info_by_index(i)
-            # check for input channels
+            # check if input device
             if device_info['maxInputChannels'] > 0:
                 # create device name
                 device_name = f"{str(device_info['index'])}. {device_info['name']}"
                 # set local data
-                self.device_map[device_name] = device_info['index']
+                self.device_map[device_name] = device_info
                 self.device_map['None'] = None
 
     def start_audio_streams(self):
         # get selected
-        device_ids = [self.device_map[dropdown.selected_option.get()] for dropdown in self.audio_input_dropdowns]
-        # remove None values
-        device_ids = [x for x in device_ids if x is not None]
+        device_infos = [self.device_map[dropdown.selected_option.get()] for dropdown in self.audio_input_dropdowns]
+        device_ids = [device_info['index'] for device_info in device_infos if device_info['index'] is not None]
         if (len(device_ids) == 0):
             print("no audio input devices selected")
             return
         language = self.selected_language.get()
-        asyncio.run_coroutine_threadsafe(self.transcription_controller.start(device_ids, language), self.asyncio_loop)
+        fut = asyncio.run_coroutine_threadsafe(self.transcription_controller.start_deepgram(device_ids, language), self.asyncio_loop)
+        fut.result()
+        # get audio input capture frequencies
+        device_frequencies = [device_info['defaultSampleRate'] for device_info in device_infos if device_info['index'] is not None]
+        print('device_frequencies', device_frequencies)
+        self.transcription_controller.start(device_ids, device_frequencies, self.asyncio_loop)
         self.capture_button.config(text="Stop Capture")
 
-    def stop_audio_streams(self):
+    def stop_transcription(self):
         future = asyncio.run_coroutine_threadsafe(self.transcription_controller.stop(), self.asyncio_loop)
         future.result() # make UI hang while stopping
         self.capture_button.config(text="Start Capture")
 
     def toggle_capture(self):
         # toggle capture button logic
-        if self.transcription_controller.audio_stream_user == None and \
-            self.transcription_controller.audio_stream_system == None:
+        if self.transcription_controller.audio_stream_0 == None and \
+            self.transcription_controller.audio_stream_1 == None:
             self.start_audio_streams()
         else:
-            self.stop_audio_streams()
+            self.stop_transcription()
 
     def toggle_prompt_edit_save(self):
         if self.textbox_base_prompt.cget('state') == 'disabled':

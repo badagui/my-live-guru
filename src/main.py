@@ -15,7 +15,7 @@
 """
 
 from threading import Thread
-import pyaudio
+import pyaudiowpatch as pyaudio
 import os
 import asyncio
 import signal
@@ -28,8 +28,6 @@ load_dotenv()
 
 DEEPGRAM_API_KEY = os.getenv('DEEPGRAM_API_KEY')
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-MIC_DEVICE_ID = 1
-STEREOMIX_DEVICE_ID = 2
 
 # asyncio event wrapper
 class EventAsyncio:
@@ -63,31 +61,32 @@ async def asyncio_main(terminate_event: EventAsyncio):
         print(f'main routine exception {e}')
 
 # ctrl+C handler
-def SIGINT_handler(signal, frame):
+def SIGINT_handler(signal, frame, app_gui: AppGUI):
     print('SIGINT received')
-    future = asyncio.run_coroutine_threadsafe(transcription_controller.stop(), asyncio_loop)
-    future.result()
-    asyncio_loop.call_soon_threadsafe(terminate_event.set)
-    app_gui.root.destroy()
+    app_gui.root.after(0, app_gui.close_program)
 
-signal.signal(signal.SIGINT, SIGINT_handler)
+def main():
+    p = pyaudio.PyAudio()
+    transcription_controller = TranscriptionController(p, DEEPGRAM_API_KEY)
+    gpt_controller = GPTController(OPENAI_API_KEY)
+    terminate_event = EventAsyncio()
+    asyncio_loop = asyncio.new_event_loop()
+    app_gui = AppGUI(transcription_controller, gpt_controller, asyncio_loop, terminate_event)
+    
+    # ctrl+C handler
+    signal.signal(signal.SIGINT, lambda signal, frame: SIGINT_handler(signal, frame, app_gui))
 
-p = pyaudio.PyAudio()
-transcription_controller = TranscriptionController(p, DEEPGRAM_API_KEY)
-gpt_controller = GPTController(OPENAI_API_KEY)
-terminate_event = EventAsyncio()
+    # start the asyncio loop in a separate thread
+    asyncio_thread = Thread(target=start_asyncio_loop, args=(asyncio_loop, terminate_event), daemon=True)
+    asyncio_thread.start()
 
-# start the asyncio loop in a separate thread
-asyncio_loop = asyncio.new_event_loop()
-asyncio_thread = Thread(target=start_asyncio_loop, args=(asyncio_loop, terminate_event), daemon=False)
-asyncio_thread.start()
+    # start GUI loop in mainthread
+    app_gui.run_mainloop()
 
-# start GUI loop in mainthread
-app_gui = AppGUI(transcription_controller, gpt_controller, asyncio_loop, terminate_event)
-app_gui.run_mainloop()
+    p.terminate()
+    
+    # wait until asyncio loop is terminated
+    asyncio_thread.join()
 
-p.terminate()
-
-# wait until asyncio loop is terminated
-asyncio_thread.join()
-
+if __name__ == "__main__":
+    main()

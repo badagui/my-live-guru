@@ -1,5 +1,6 @@
 import asyncio
-import pyaudio
+# import pyaudio
+import pyaudiowpatch as pyaudio
 from deepgram import Deepgram
 import numpy as np
 import queue
@@ -9,33 +10,37 @@ class TranscriptionController:
     def __init__(self, p: pyaudio.PyAudio, DEEPGRAM_API_KEY: str):
         self.p = p  # PyAudio object
         self.deepgram_transcriber = DeepgramTranscriber(DEEPGRAM_API_KEY)
-        self.audio_stream_user = None
-        self.audio_stream_system = None
-        self.final_results = queue.Queue(10) # thread safe interface
+        self.audio_stream_0 = None
+        self.audio_stream_1 = None
+        self.transcriptions_queue = queue.Queue(10) # thread safe interface
 
-    async def start(self, device_ids: list, language: str):
+    def start(self, device_ids: list, device_input_rates: list, loop: asyncio.AbstractEventLoop):
         print (f'starting transcription controller with device ids {device_ids}')
         channels = len(device_ids)
         multichannel = channels > 1
         try:
-            await self.deepgram_transcriber.initialize(self.final_results, language, channels, multichannel)
             mixer_mode = 1 if multichannel else 0
             audio_mixer = AudioMixer(device_ids, mixer_mode, self.deepgram_transcriber.send_audio)
-            self.audio_stream_user = AudioStream(self.p, device_ids[0], audio_mixer.audio_handler)
-            if (len(device_ids) == 2):
-                self.audio_stream_system = AudioStream(self.p, device_ids[1], audio_mixer.audio_handler)
-            # audio_mixer.save_mixed_data_to_file('mixed_audio.lin16') # uncomment to save mixed audio to file
+            self.audio_stream_0 = AudioStream(self.p, device_ids[0], audio_mixer.audio_handler, loop, device_input_rates[0])
+            if (channels == 2):
+                self.audio_stream_1 = AudioStream(self.p, device_ids[1], audio_mixer.audio_handler, loop, device_input_rates[1])
+            audio_mixer.save_mixed_data_to_file('mixed_audio.lin16') # uncomment to save mixed audio to file
         except Exception as e:
             print(f"audio controller start exception {e}")
     
+    async def start_deepgram(self, device_ids: list, language: str):
+        channels = len(device_ids)
+        multichannel = channels > 1
+        await self.deepgram_transcriber.initialize(self.transcriptions_queue, language, channels, multichannel)
+
     async def stop(self):
         try:
-            if self.audio_stream_user is not None:
-                self.audio_stream_user.stop()
-                self.audio_stream_user = None
-            if self.audio_stream_system is not None:
-                self.audio_stream_system.stop()
-                self.audio_stream_system = None
+            if self.audio_stream_0 is not None:
+                self.audio_stream_0.stop()
+                self.audio_stream_0 = None
+            if self.audio_stream_1 is not None:
+                self.audio_stream_1.stop()
+                self.audio_stream_1 = None
             await self.deepgram_transcriber.close()
         except Exception as e:
             print(f"audio controller stop exception {e}")
@@ -43,27 +48,28 @@ class TranscriptionController:
     async def terminate(self):
         await self.stop()
     
-    
 # mixes audio streams into a single or multi-channel buffer
 class AudioMixer:
     # mode 0: mix all devices into a single channel
     # mode 1: mix each device into its own channel
     # device_ids are needed so we can know when all chunks are available for mixing
-    def __init__(self, device_ids: list, mode: int, mixed_callback):
-        self.set_new_device_ids(device_ids)
+    def __init__(self, device_ids: list, mode: int, mixed_callback, chunk_size=1024*4):
+        self.device_ids = device_ids
         self.mode = mode
         self.mixed_callback = mixed_callback
-        self.mixed_data_file = None
+        self.chunk_size = chunk_size
+        self.output_file = None
+        self.audio_buffers = {device_id: b'' for device_id in device_ids}
 
     def set_new_device_ids(self, device_ids: list):
-        self.audio_sync = {device_id: None for device_id in device_ids}
+        self.audio_buffers = {device_id: b'' for device_id in device_ids}
 
-    def audio_handler(self, device_id, audio):
-        # store audio chunk
-        self.audio_sync[device_id] = audio
-        
+    def audio_handler(self, device_id, audio_chunk):
+        # append new chunk to the buffer
+        self.audio_buffers[device_id] += audio_chunk
+
         # check if all data available
-        if not all(data is not None for data in self.audio_sync.values()):
+        if not all(len(self.audio_buffers[device_id]) >= self.chunk_size for device_id in self.device_ids):
             return
         
         # mix data
@@ -74,54 +80,59 @@ class AudioMixer:
             self.mixed_callback(mixed_data)
 
         # save mixed data to file if specified
-        if self.mixed_data_file:  # Check if a file is open and save mixed_data
-            with open(self.mixed_data_file, 'ab') as file:
+        if self.output_file:
+            with open(self.output_file, 'ab') as file:
                 file.write(mixed_data)
         
-        # clear buffer - keys must persist to check for data availability
-        self.audio_sync = {key: None for key in self.audio_sync}
+        # clear used data from buffers
+        for device_id in self.device_ids:
+            self.audio_buffers[device_id] = self.audio_buffers[device_id][self.chunk_size:]
 
     def _mix_audio(self):
-        if not self.audio_sync:
-            raise ValueError("audio_data is empty")
-        
         audio_arrays = []
 
         # gather audio data
-        for device_id in self.audio_sync:
-            audio_arrays.append(np.frombuffer(self.audio_sync[device_id], dtype=np.int16))
+        for device_id in self.device_ids:
+            # ensure each buffer has enough data for chunk_size
+            buffer = self.audio_buffers[device_id][:self.chunk_size]
+            audio_arrays.append(np.frombuffer(buffer, dtype=np.int16))
 
-        if not audio_arrays:
-            raise ValueError("no audio data found")
-        
-        # single channel, averaged
-        if self.mode == 0:
+        # mix audio data
+        if self.mode == 0: # single channel, averaged
             mixed_array = np.mean(audio_arrays, axis=0).astype(np.int16)
             return mixed_array.tobytes()
+        elif self.mode == 1: # multi channel
+            mixed_array = np.stack(audio_arrays, axis=-1).astype(np.int16)
+        else:
+            raise ValueError(f"invalid mixer mode {self.mode}")
         
-        # multi channel
-        if self.mode == 1:
-            return np.stack(audio_arrays, axis=-1).tobytes()
+        return mixed_array.tobytes()
     
     def save_mixed_data_to_file(self, filename):
-        self.mixed_data_file = filename
+        self.output_file = filename
+
+
 
 # single audio stream that generate audio slices from an input device
 class AudioStream:
-    def __init__(self, pyaudio_obj, device_id, audio_callback):
+    # note: if we run this as a coroutine from mainthread (with run_coroutine_threadsafe) we get an error [Errno -9999] Unanticipated host error (when opening loopback streams available with pyaudiowpatch)
+    def __init__(self, pyaudio_obj, device_id, audio_callback, loop, source_rate, out_rate=16000):
         self.p = pyaudio_obj  # PyAudio object
         self.device_id = device_id
         self.audio_callback = audio_callback
-        self._buffer = asyncio.Queue(maxsize=5)
-        
+        self.in_rate = source_rate
+        self.out_rate = out_rate
+        self._buffer = asyncio.Queue(maxsize=50, loop=loop)
+
         self.stream = self.p.open(format=pyaudio.paInt16,
                                   channels=1,
-                                  rate=16000,
+                                  rate=int(source_rate),
                                   input=True,
                                   input_device_index=device_id,
-                                  frames_per_buffer=1024*4,
+                                  frames_per_buffer=int(1024*4 * source_rate / out_rate),
                                   stream_callback=self._fill_buffer)
-        self.consume_buffer_task = asyncio.create_task(self._consume_buffer())
+        
+        self.consume_buffer_task = asyncio.run_coroutine_threadsafe(self._consume_buffer(), loop)
 
     def stop(self):
         if self.stream is not None:
@@ -136,8 +147,9 @@ class AudioStream:
             return (None, pyaudio.paContinue)
         except asyncio.QueueFull:
             print("buffer full, dropping audio data")
-        except:
-            print ("fill buffer exception")
+            return (None, pyaudio.paContinue)
+        except Exception as e:
+            print ("fill buffer exception", e)
     
     async def _consume_buffer(self):
         try:
@@ -146,12 +158,33 @@ class AudioStream:
                 if audio_data is None:
                     print('audio worker: got None from buffer - returning')
                     return
+                # convert bytes data to numpy array
+                np_audio_data = np.frombuffer(audio_data, dtype=np.int16)
+                # resample the audio using interpolation
+                resampled_data = self._resample(np_audio_data, self.in_rate, self.out_rate)
+                # convert back to bytes
+                resampled_bytes = resampled_data.astype(np.int16).tobytes()
                 if self.audio_callback:
-                    self.audio_callback(self.device_id, audio_data)
-                await asyncio.sleep(0.01)
-        except:
-            print("consume buffer exception")
+                    self.audio_callback(self.device_id, resampled_bytes)
+                await asyncio.sleep(0)
+        except Exception as e:
+            print("consume buffer exception", e)
             return
+
+    # uses linear interpolation for resampling
+    def _resample(self, audio_data: np.ndarray, original_rate, new_rate):
+        try:
+            # new number of samples
+            ratio = new_rate / original_rate
+            new_length = int(len(audio_data) * ratio)
+            # new sample indices
+            new_indices = np.linspace(0, len(audio_data) - 1, new_length)
+            # use numpy interpolation
+            resampled_data = np.interp(new_indices, np.arange(len(audio_data)), audio_data)
+            return resampled_data
+        except Exception as e:
+            print("resample exception", e)
+            return None
 
 # accept audio slices and sends them to deepgram returning transcriptions
 class DeepgramTranscriber:
